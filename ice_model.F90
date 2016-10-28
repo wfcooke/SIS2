@@ -83,7 +83,7 @@ use ice_type_mod, only : ice_model_restart, dealloc_ice_arrays, dealloc_IST_arra
 use ice_type_mod, only : ice_data_type_register_restarts, ice_state_register_restarts
 use ice_type_mod, only : ice_diagnostics_init, ice_stock_pe
 use ice_type_mod, only : ocean_ice_boundary_type, atmos_ice_boundary_type, land_ice_boundary_type
-use ice_type_mod, only : ocn_ice_bnd_type_chksum, atm_ice_bnd_type_chksum
+use ice_type_mod, only : ocn_ice_bnd_type_chksum, atm_ice_bnd_type_chksum, Ice_ocean_flux_type_chksum
 use ice_type_mod, only : lnd_ice_bnd_type_chksum, ice_data_type_chksum
 use ice_type_mod, only : IST_chksum, Ice_public_type_chksum
 use ice_type_mod, only : IST_bounds_check, Ice_public_type_bounds_check
@@ -144,6 +144,7 @@ subroutine update_ice_model_slow_dn ( Atmos_boundary, Land_boundary, Ice )
 
   if (Ice%Ice_state%debug) then
     call Ice_public_type_chksum("Start update_ice_model_slow_dn", Ice)
+    call Ice_ocean_flux_type_chksum("Start update_ice_model_slow_dn", Ice%IOF)
   endif
 
   call set_ice_state_fluxes(Ice%IOF, Ice, Land_boundary, Ice%G, Ice%IG)
@@ -155,14 +156,27 @@ subroutine update_ice_model_slow_dn ( Atmos_boundary, Land_boundary, Ice )
     call mpp_clock_begin(iceClock) ; call mpp_clock_begin(iceClock2)
   endif
 
+  if (Ice%Ice_state%debug) then
+    call Ice_public_type_chksum("Before slow_thermodynamics", Ice)
+    call Ice_ocean_flux_type_chksum("Before slow_thermodynamics", Ice%IOF)
+  endif
+
   call slow_thermodynamics(Ice%Ice_state, dt_slow, Ice%Ice_state%slow_thermo_CSp, &
                            Ice%OSS, Ice%FIA, Ice%IOF, Ice%G, Ice%IG)
+
+  if (Ice%Ice_state%debug) then
+    call Ice_public_type_chksum("Before SIS_dynamics_trans", Ice)
+    call Ice_ocean_flux_type_chksum("Before SIS_dynamics_trans", Ice%IOF)
+  endif
 
   call SIS_dynamics_trans(Ice%Ice_state, Ice%OSS, Ice%FIA, Ice%IOF, &
                           dt_slow, Ice%Ice_state%dyn_trans_CSp, Ice%icebergs, Ice%G, Ice%IG)
 
-  if (Ice%Ice_state%debug) &
+  if (Ice%Ice_state%debug) then
+    call Ice_public_type_chksum("Before set_ocean_top_fluxes", Ice)
+    call Ice_ocean_flux_type_chksum("Before set_ocean_top_fluxes", Ice%IOF)
     call IST_chksum("Before set_ocean_top_fluxes", Ice%Ice_state, Ice%G, Ice%IG)
+  endif
   ! Set up the thermodynamic fluxes in the externally visible structure Ice.
   call set_ocean_top_fluxes(Ice, Ice%Ice_state, Ice%IOF, Ice%G, Ice%IG)
 
@@ -190,6 +204,10 @@ subroutine set_ice_state_fluxes(IOF, Ice, LIB, G, IG)
   integer :: i, j, k, m, n, i2, j2, k2, isc, iec, jsc, jec, i_off, j_off, ncat
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec ; ncat = IG%CatIce
 
+  if ( IOF%debug ) then
+    call lnd_ice_bnd_type_chksum("Start set_ice_state_fluxes",1, LIB)
+  endif
+  
   ! Store liquid runoff and other fluxes from the land to the ice or ocean.
   i_off = LBOUND(LIB%runoff,1) - G%isc ; j_off = LBOUND(LIB%runoff,2) - G%jsc
 !$OMP parallel do default(none) shared(isc,iec,jsc,jec,IOF,LIB,i_off,j_off) &
@@ -214,6 +232,11 @@ subroutine set_ice_state_fluxes(IOF, Ice, LIB, G, IG)
     IOF%flux_v_ocn(i,j) = Ice%flux_v(i2,j2)
   enddo ; enddo
 
+  if ( IOF%debug ) then
+    call lnd_ice_bnd_type_chksum("End set_ice_state_fluxes",1, LIB)
+    call Ice_ocean_flux_type_chksum("End set_ice_state_fluxes", IOF)
+  endif
+
 end subroutine set_ice_state_fluxes
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
@@ -236,6 +259,7 @@ subroutine set_ocean_top_fluxes(Ice, IST, IOF, G, IG)
 
   if (IST%debug) then
     call Ice_public_type_chksum("Start set_ocean_top_fluxes", Ice)
+    call Ice_ocean_flux_type_chksum("Start set_ocean_top_fluxes", IOF)
   endif
 
   ! This block of code is probably unneccessary.
@@ -319,6 +343,7 @@ subroutine set_ocean_top_fluxes(Ice, IST, IOF, G, IG)
 
   if (IST%debug) then
     call Ice_public_type_chksum("End set_ocean_top_fluxes", Ice)
+    call IST_chksum("Start set_ocean_top_fluxes", IST, G, IG)
   endif
 
 end subroutine set_ocean_top_fluxes
@@ -1317,6 +1342,8 @@ subroutine ice_model_init(Ice, Time_Init, Time, Time_step_fast, Time_step_slow )
   call alloc_ocean_sfc_state(Ice%OSS, HI, IST%Cgrid_dyn)
 
   call alloc_ice_ocean_flux(Ice%IOF, HI)
+  call get_param(param_file, mod, "DEBUG_IOF", Ice%IOF%debug, &
+                 "If true, write out verbose debugging data.", default=.false.)
 
   call alloc_fast_ice_avg(Ice%FIA, HI, IG)
   Ice%FIA%atmos_winds = atmos_winds
